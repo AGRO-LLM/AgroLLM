@@ -2,14 +2,16 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getChats, createChat, predict, deleteChat, updateChat, transcribeAudio, getAnswer } from '../services/api';
 import { uploadImage as uploadChatImageSvc, removeImage as removeChatImageSvc, fetchImage as fetchChatImage } from '../services/imageChatHandler';
+import { useTheme } from '../contexts/ThemeContext';
 import styles from './ChatPage.module.css';
 import Sidebar from '../components/Chat/Sidebar';
 import ChatArea from '../components/Chat/ChatArea';
+import InputArea from '../components/Chat/InputArea';
 
 const ChatPage = () => {
   const [chats, setChats] = useState([]);
   const [currentChat, setCurrentChat] = useState(null);
-  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const { theme, toggleTheme } = useTheme();
   const [message, setMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -27,10 +29,6 @@ const ChatPage = () => {
   const [userInfo, setUserInfo] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  useEffect(() => {
-    document.body.className = theme;
-    localStorage.setItem('theme', theme);
-  }, [theme]);
 
   useEffect(() => {
     const storedUserInfo = localStorage.getItem('userInfo');
@@ -99,6 +97,13 @@ const ChatPage = () => {
     };
   }, [imagePreviewUrl]);
 
+  useEffect(() => {
+    // Safety check to ensure recording state is properly reset
+    if (isRecording && mediaRecorderRef.current && mediaRecorderRef.current.state !== 'recording') {
+      setIsRecording(false);
+    }
+  }, [isRecording]);
+
   const fetchChats = async () => {
     try {
       const response = await getChats();
@@ -114,6 +119,8 @@ const ChatPage = () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
       }
+      // Ensure recording state is reset
+      setIsRecording(false);
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -214,21 +221,21 @@ const ChatPage = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!message.trim() || isLoading) return;
+    const hasImage = Boolean(selectedImage || imagePreviewUrl);
+    if ((!message.trim() && !hasImage) || isLoading) return;
 
     const currentMessage = message;
     setMessage('');
     setIsLoading(true);
 
-    const userMessage = {
+    const userMessage = currentMessage.trim() ? {
       sender: 'user',
       content: currentMessage,
       timestamp: new Date().toISOString(),
-    };
+    } : null;
 
     let activeChat = currentChat;
     let newChatCreated = false;
-    const hasImage = Boolean(selectedImage || imagePreviewUrl);
     const localImageUrl = imagePreviewUrl || null;
     const imagePlaceholderMsg = hasImage
       ? {
@@ -242,11 +249,16 @@ const ChatPage = () => {
     try {
       // If there is no active chat, create one.
       if (!activeChat) {
-        const initialMessages = imagePlaceholderMsg
-          ? [userMessage, imagePlaceholderMsg]
-          : [userMessage];
+        const initialMessages = [];
+        if (userMessage) initialMessages.push(userMessage);
+        if (imagePlaceholderMsg) initialMessages.push(imagePlaceholderMsg);
+        
+        const chatTitle = currentMessage.trim() 
+          ? currentMessage.substring(0, 30) 
+          : 'Image Chat';
+          
         const newChatResponse = await createChat({
-          title: currentMessage.substring(0, 30),
+          title: chatTitle,
           messages: initialMessages,
         });
         activeChat = newChatResponse.data;
@@ -255,9 +267,7 @@ const ChatPage = () => {
           const enhanced = {
             ...activeChat,
             messages: activeChat.messages.map(m =>
-              m.sender === 'user' && m.content === '__image__'
-                ? { ...m, imageUrl: localImageUrl }
-                : m
+              m.sender === 'user' && m.content === '__image__' ? { ...m, imageUrl: localImageUrl } : m
             ),
           };
           setChats(prevChats => [enhanced, ...prevChats]);
@@ -269,15 +279,16 @@ const ChatPage = () => {
         newChatCreated = true;
       } else {
         // If a chat is active, update it with the new user message immediately.
-        const updatedMessages = imagePlaceholderMsg
-          ? [...activeChat.messages, userMessage, imagePlaceholderMsg]
-          : [...activeChat.messages, userMessage];
+        const updatedMessages = [...activeChat.messages];
+        if (userMessage) updatedMessages.push(userMessage);
+        if (imagePlaceholderMsg) updatedMessages.push(imagePlaceholderMsg);
+        
         // Enhance UI with image bubble immediately
         const enhanced = imagePlaceholderMsg && localImageUrl
           ? {
               ...activeChat,
               messages: updatedMessages.map(m =>
-                m.sender === 'user' && m.content === '__image__'
+                m.sender === 'user' && m.content === '__image__' ? { ...m, imageUrl: localImageUrl } : m
                   ? { ...m, imageUrl: localImageUrl }
                   : m
               ),
@@ -400,10 +411,7 @@ const ChatPage = () => {
     }
   };
 
-  const handleThemeToggle = () => {
-    const newTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(newTheme);
-  };
+  // Theme toggle is now handled by the ThemeContext
 
   const handleLogout = () => {
     localStorage.removeItem('userInfo');
@@ -417,7 +425,7 @@ const ChatPage = () => {
   };
 
   return (
-    <div className={`${styles.chatContainer} ${theme} ${isSidebarOpen ? styles.sidebarOpen : ''}`}>
+    <div className={`${styles.chatContainer} ${isSidebarOpen ? styles.sidebarOpen : ''}`}>
       <Sidebar 
         userInfo={userInfo}
         chats={chats}
@@ -427,7 +435,7 @@ const ChatPage = () => {
         handleDeleteChat={handleDeleteChat}
         handleClearChats={handleClearChats}
         theme={theme}
-        handleThemeToggle={handleThemeToggle}
+        handleThemeToggle={toggleTheme}
         handleLogout={handleLogout}
       />
       <ChatArea 
